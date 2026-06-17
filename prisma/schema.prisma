@@ -1,0 +1,63 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model CardSecret {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  value     Float    @default(0.0)
+  status    String   @default("UNUSED") // UNUSED, USED, LOCKED
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  Order     Order[]
+}
+
+model Number {
+  id        String   @id @default(cuid())
+  phone     String
+  country   String
+  service   String
+  status    String   @default("AVAILABLE") // AVAILABLE, LOCKED, USED
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  Order     Order[]
+}
+
+model Order {
+  id           String      @id @default(cuid())
+  status       String      @default("PENDING") // PENDING, ACTIVE, COMPLETED, REFUNDED
+  cost         Float       @default(0.0)
+  supplierId   String?
+  cardSecretId String
+  numberId     String
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  CardSecret   CardSecret  @relation(fields: [cardSecretId], references: [id])
+  Number       Number      @relation(fields: [numberId], references: [id])
+  SMSLog       SMSLog[]
+}
+
+model SMSLog {
+  id         String   @id @default(cuid())
+  orderId    String
+  message    String
+  sender     String
+  receivedAt DateTime @default(now())
+  Order      Order    @relation(fields: [orderId], references: [id])
+}
+
+model SystemConfig {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
