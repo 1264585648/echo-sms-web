@@ -5,6 +5,7 @@ import {
   authorizeCardSecretForOrder,
   readCardSecretCodeFromHeader,
 } from '@/lib/card-secret-auth';
+import { readSystemConfigMap } from '@/lib/system-config';
 
 export async function GET(
   req: Request,
@@ -62,8 +63,8 @@ export async function GET(
 
     // Only poll upstream if status is PENDING and we have a supplierId
     if (order.status === 'PENDING' && order.supplierId) {
-      const configRecords = await db.systemConfig.findMany();
-      const apiKey = configRecords.find(c => c.key === 'HERO_API_KEY')?.value;
+      const config = await readSystemConfigMap(db.systemConfig, ['HERO_API_KEY']);
+      const apiKey = config['HERO_API_KEY'];
 
       if (apiKey) {
         const client = new HeroSMSClient(apiKey);

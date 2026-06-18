@@ -5,6 +5,7 @@ import {
   authorizeCardSecretForOrder,
   readCardSecretCodeFromHeader,
 } from '@/lib/card-secret-auth';
+import { readSystemConfigMap } from '@/lib/system-config';
 
 export async function POST(
   req: Request,
@@ -58,8 +59,8 @@ export async function POST(
 
     // Call upstream to cancel
     if (order.supplierId) {
-      const configRecords = await db.systemConfig.findMany();
-      const apiKey = configRecords.find(c => c.key === 'HERO_API_KEY')?.value;
+      const config = await readSystemConfigMap(db.systemConfig, ['HERO_API_KEY']);
+      const apiKey = config['HERO_API_KEY'];
       if (!apiKey) {
         return NextResponse.json({ error: 'System configuration error: Missing API Key' }, { status: 500 });
       }

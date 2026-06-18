@@ -4,6 +4,7 @@ import { db } from '@/lib/db';
 import { HeroSMSClient } from '@/lib/hero-sms';
 import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
 import { readRedeemRequestBody } from '@/lib/redeem-request';
+import { readSystemConfigMap } from '@/lib/system-config';
 
 const REDEEM_IP_RATE_LIMIT_MAX = 20;
 const REDEEM_CODE_RATE_LIMIT_MAX = 10;
@@ -61,11 +62,11 @@ export async function POST(req: Request) {
     }
 
     // 1. Fetch Configs
-    const configRecords = await db.systemConfig.findMany();
-    const config: Record<string, string> = {};
-    for (const conf of configRecords) {
-      config[conf.key] = conf.value;
-    }
+    const config = await readSystemConfigMap(db.systemConfig, [
+      'HERO_API_KEY',
+      'EXCHANGE_RATE',
+      'SERVICES',
+    ]);
 
     const apiKey = config['HERO_API_KEY'];
     if (!apiKey) {

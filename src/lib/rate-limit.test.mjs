@@ -113,3 +113,44 @@ test('caps the store by evicting the oldest buckets', () => {
   assert.equal(store.has('newest'), true);
   assert.equal(store.size, 2);
 });
+
+test('does not resweep unrelated expired buckets inside the sweep interval', () => {
+  const store = new Map([
+    ['expired-on-first-sweep', { count: 1, resetAt: 900 }],
+    ['active', { count: 1, resetAt: 10_000 }],
+  ]);
+
+  checkRateLimit({
+    key: 'first-key',
+    max: 2,
+    windowMs: 1_000,
+    now: 1_000,
+    store,
+    sweepIntervalMs: 10_000,
+  });
+
+  assert.equal(store.has('expired-on-first-sweep'), false);
+  store.set('expired-after-sweep', { count: 1, resetAt: 1_100 });
+
+  checkRateLimit({
+    key: 'second-key',
+    max: 2,
+    windowMs: 1_000,
+    now: 1_200,
+    store,
+    sweepIntervalMs: 10_000,
+  });
+
+  assert.equal(store.has('expired-after-sweep'), true);
+
+  checkRateLimit({
+    key: 'third-key',
+    max: 2,
+    windowMs: 1_000,
+    now: 11_001,
+    store,
+    sweepIntervalMs: 10_000,
+  });
+
+  assert.equal(store.has('expired-after-sweep'), false);
+});

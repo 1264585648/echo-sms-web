@@ -12,6 +12,7 @@ export type RateLimitOptions = {
   now?: number;
   store?: RateLimitStore;
   maxEntries?: number;
+  sweepIntervalMs?: number;
 };
 
 export type RateLimitResult = {
@@ -24,7 +25,9 @@ export type RateLimitResult = {
 };
 
 export const DEFAULT_RATE_LIMIT_MAX_ENTRIES = 10_000;
+export const DEFAULT_RATE_LIMIT_SWEEP_INTERVAL_MS = 30_000;
 export const defaultRateLimitStore: RateLimitStore = new Map();
+const sweepState = new WeakMap<RateLimitStore, number>();
 
 function sweepExpiredBuckets(store: RateLimitStore, now: number) {
   for (const [key, bucket] of store) {
@@ -32,6 +35,24 @@ function sweepExpiredBuckets(store: RateLimitStore, now: number) {
       store.delete(key);
     }
   }
+}
+
+function sweepExpiredBucketsIfDue(
+  store: RateLimitStore,
+  now: number,
+  sweepIntervalMs: number,
+) {
+  const lastSweepAt = sweepState.get(store);
+  if (
+    lastSweepAt !== undefined &&
+    now >= lastSweepAt &&
+    now - lastSweepAt < sweepIntervalMs
+  ) {
+    return;
+  }
+
+  sweepExpiredBuckets(store, now);
+  sweepState.set(store, now);
 }
 
 function enforceStoreLimit(store: RateLimitStore, maxEntries: number) {
@@ -49,6 +70,7 @@ export function checkRateLimit({
   now = Date.now(),
   store = defaultRateLimitStore,
   maxEntries = DEFAULT_RATE_LIMIT_MAX_ENTRIES,
+  sweepIntervalMs = DEFAULT_RATE_LIMIT_SWEEP_INTERVAL_MS,
 }: RateLimitOptions): RateLimitResult {
   if (!key) {
     throw new RangeError('Rate limit key is required.');
@@ -62,8 +84,11 @@ export function checkRateLimit({
   if (!Number.isFinite(maxEntries) || maxEntries < 1) {
     throw new RangeError('Rate limit maxEntries must be at least 1.');
   }
+  if (!Number.isFinite(sweepIntervalMs) || sweepIntervalMs < 0) {
+    throw new RangeError('Rate limit sweepIntervalMs must be at least 0.');
+  }
 
-  sweepExpiredBuckets(store, now);
+  sweepExpiredBucketsIfDue(store, now, sweepIntervalMs);
 
   const existing = store.get(key);
   const bucket =
