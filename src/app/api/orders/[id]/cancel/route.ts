@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { HeroSMSClient } from '@/lib/hero-sms';
+import {
+  authorizeCardSecretForOrder,
+  readCardSecretCodeFromHeader,
+} from '@/lib/card-secret-auth';
 
 export async function POST(
   req: Request,
@@ -14,12 +18,38 @@ export async function POST(
       return NextResponse.json({ error: 'Order ID is required' }, { status: 400 });
     }
 
+    const cardSecretCode = readCardSecretCodeFromHeader(req.headers);
+    if (!cardSecretCode) {
+      return NextResponse.json({ error: 'Card secret code is required' }, { status: 401 });
+    }
+
     const order = await db.order.findUnique({
-      where: { id: orderId }
+      where: { id: orderId },
+      select: {
+        id: true,
+        status: true,
+        supplierId: true,
+        cardSecretId: true,
+        cost: true,
+      },
     });
 
     if (!order) {
       return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+    }
+
+    const authResult = await authorizeCardSecretForOrder({
+      code: cardSecretCode,
+      orderCardSecretId: order.cardSecretId,
+      findCardSecretByCode: (code) =>
+        db.cardSecret.findUnique({
+          where: { code },
+          select: { id: true },
+        }),
+    });
+
+    if (!authResult.ok) {
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
     }
 
     if (order.status !== 'PENDING') {
@@ -30,30 +60,36 @@ export async function POST(
     if (order.supplierId) {
       const configRecords = await db.systemConfig.findMany();
       const apiKey = configRecords.find(c => c.key === 'HERO_API_KEY')?.value;
-      if (apiKey) {
-        const client = new HeroSMSClient(apiKey);
-        try {
-          await client.setStatus(order.supplierId, 8); // 8 is cancel
-        } catch (e: any) {
-          console.error("Upstream cancel failed (might already be cancelled):", e.message);
+      if (!apiKey) {
+        return NextResponse.json({ error: 'System configuration error: Missing API Key' }, { status: 500 });
+      }
+
+      const client = new HeroSMSClient(apiKey);
+      try {
+        const resText = await client.setStatus(order.supplierId, 8); // 8 is cancel
+        if (resText !== 'ACCESS_CANCEL') {
+          return NextResponse.json({ error: `Cancellation denied by provider: ${resText}` }, { status: 400 });
         }
+      } catch (e: any) {
+        console.error("Upstream cancel failed:", e.message);
+        return NextResponse.json({ error: 'Upstream network error during cancellation' }, { status: 502 });
       }
     }
 
     // Refund locally
     await db.$transaction(async (tx) => {
+      const currentOrder = await tx.order.findUnique({ where: { id: order.id } });
+      if (currentOrder?.status !== 'PENDING') return; // Idempotency check
+
       await tx.order.update({
         where: { id: order.id },
         data: { status: 'REFUNDED' }
       });
       
-      const secret = await tx.cardSecret.findUnique({ where: { id: order.cardSecretId } });
-      if (secret) {
-        await tx.cardSecret.update({
-          where: { id: secret.id },
-          data: { value: secret.value + order.cost }
-        });
-      }
+      await tx.cardSecret.update({
+        where: { id: order.cardSecretId },
+        data: { value: { increment: order.cost }, status: 'UNUSED' }
+      });
     });
 
     return NextResponse.json({ success: true });

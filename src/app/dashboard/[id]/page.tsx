@@ -24,7 +24,17 @@ export default function DashboardPage({ params }: { params: Promise<{ id: string
 
     const fetchOrder = async () => {
       try {
-        const res = await fetch(`/api/orders/${orderId}`);
+        const cardSecretCode = localStorage.getItem('echo_sms_card_secret')?.trim();
+        if (!cardSecretCode) {
+          router.push("/");
+          return;
+        }
+
+        const res = await fetch(`/api/orders/${orderId}`, {
+          headers: {
+            'x-card-secret-code': cardSecretCode,
+          },
+        });
         const data = await res.json();
         
         if (data.success && data.order) {

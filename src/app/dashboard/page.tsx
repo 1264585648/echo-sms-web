@@ -1,7 +1,36 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { ShieldCheck, Server, Globe2 } from "lucide-react";
+import { db } from "@/lib/db";
+import Link from "next/link";
 
-export default function GeneralDashboard() {
+export const dynamic = "force-dynamic";
+
+export default async function GeneralDashboard() {
+  // Fetch active numbers (Orders with PENDING or ACTIVE status)
+  const activeOrdersCount = await db.order.count({
+    where: { status: { in: ['PENDING', 'ACTIVE'] } }
+  });
+
+  // Calculate success rate
+  const completedOrders = await db.order.count({ where: { status: 'COMPLETED' } });
+  const refundedOrders = await db.order.count({ where: { status: 'REFUNDED' } });
+  const totalResolved = completedOrders + refundedOrders;
+  const successRate = totalResolved > 0 ? ((completedOrders / totalResolved) * 100).toFixed(1) + "%" : "N/A";
+
+  // Fetch countries
+  const countriesConfig = await db.systemConfig.findUnique({
+    where: { key: 'COUNTRIES' }
+  });
+
+  let regions: Array<{name: string, id: string}> = [];
+  try {
+    if (countriesConfig?.value) {
+      regions = JSON.parse(countriesConfig.value);
+    }
+  } catch (e) {
+    // Ignore parse error
+  }
+
   return (
     <main className="flex min-h-screen flex-col items-center p-4 sm:p-8 relative">
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900/20 via-zinc-950 to-zinc-950 -z-10" />
@@ -28,11 +57,11 @@ export default function GeneralDashboard() {
               </div>
               <div className="flex justify-between items-center py-2 border-b border-white/5">
                 <span className="text-zinc-400">Active Numbers</span>
-                <span className="text-white font-medium">1,245</span>
+                <span className="text-white font-medium">{activeOrdersCount}</span>
               </div>
               <div className="flex justify-between items-center py-2 border-b border-white/5">
                 <span className="text-zinc-400">Success Rate</span>
-                <span className="text-white font-medium">99.8%</span>
+                <span className="text-white font-medium">{successRate}</span>
               </div>
             </CardContent>
           </Card>
@@ -47,11 +76,13 @@ export default function GeneralDashboard() {
             </CardHeader>
             <CardContent>
               <div className="flex flex-wrap gap-2">
-                {['United States (+1)', 'United Kingdom (+44)', 'Canada (+1)', 'Germany (+49)', 'France (+33)', 'Australia (+61)'].map((region) => (
-                  <div key={region} className="px-3 py-1.5 rounded-md bg-white/5 border border-white/10 text-sm text-zinc-300">
-                    {region}
+                {regions.length > 0 ? regions.map((region) => (
+                  <div key={region.id} className="px-3 py-1.5 rounded-md bg-white/5 border border-white/10 text-sm text-zinc-300">
+                    {region.name} (+{region.id})
                   </div>
-                ))}
+                )) : (
+                  <span className="text-zinc-500 text-sm">No regions configured</span>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -63,12 +94,12 @@ export default function GeneralDashboard() {
               <h3 className="text-lg font-medium text-white">Ready to get a number?</h3>
               <p className="text-indigo-200/80 text-sm mt-1">Return to the homepage and enter your card secret to instantly receive a verification number.</p>
             </div>
-            <a 
+            <Link
               href="/"
               className="inline-flex h-10 items-center justify-center rounded-md bg-indigo-600 px-8 text-sm font-medium text-white shadow transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500"
             >
               Enter Card Secret
-            </a>
+            </Link>
           </CardContent>
         </Card>
       </div>

@@ -7,12 +7,32 @@ import {
   isAdminRequest,
   isValidAdminPassword,
 } from "@/lib/admin-auth";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
 type LoginRequestBody = {
   password?: unknown;
 };
+
+const ADMIN_LOGIN_RATE_LIMIT_MAX = 5;
+const ADMIN_LOGIN_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
+
+function loginRateLimitedResponse(retryAfterSeconds: number) {
+  return NextResponse.json(
+    {
+      success: false,
+      error: "Too many login attempts. Try again later.",
+      code: "RATE_LIMITED",
+    },
+    {
+      status: 429,
+      headers: {
+        "Retry-After": retryAfterSeconds.toString(),
+      },
+    },
+  );
+}
 
 export async function GET(req: NextRequest) {
   return NextResponse.json({
@@ -23,6 +43,15 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const loginRateLimit = checkRateLimit({
+    key: `admin-login:${getClientIp(req.headers)}`,
+    max: ADMIN_LOGIN_RATE_LIMIT_MAX,
+    windowMs: ADMIN_LOGIN_RATE_LIMIT_WINDOW_MS,
+  });
+  if (loginRateLimit.limited) {
+    return loginRateLimitedResponse(loginRateLimit.retryAfterSeconds);
+  }
+
   if (!isAdminPasswordConfigured()) {
     return NextResponse.json(
       {

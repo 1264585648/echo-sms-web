@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { HeroSMSClient } from '@/lib/hero-sms';
+import {
+  authorizeCardSecretForOrder,
+  readCardSecretCodeFromHeader,
+} from '@/lib/card-secret-auth';
 
 export async function GET(
   req: Request,
@@ -12,6 +16,34 @@ export async function GET(
 
     if (!orderId) {
       return NextResponse.json({ error: 'Order ID is required' }, { status: 400 });
+    }
+
+    const cardSecretCode = readCardSecretCodeFromHeader(req.headers);
+    if (!cardSecretCode) {
+      return NextResponse.json({ error: 'Card secret code is required' }, { status: 401 });
+    }
+
+    const orderOwnership = await db.order.findUnique({
+      where: { id: orderId },
+      select: { cardSecretId: true },
+    });
+
+    if (!orderOwnership) {
+      return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+    }
+
+    const authResult = await authorizeCardSecretForOrder({
+      code: cardSecretCode,
+      orderCardSecretId: orderOwnership.cardSecretId,
+      findCardSecretByCode: (code) =>
+        db.cardSecret.findUnique({
+          where: { code },
+          select: { id: true },
+        }),
+    });
+
+    if (!authResult.ok) {
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
     }
 
     const order = await db.order.findUnique({
@@ -43,6 +75,9 @@ export async function GET(
             
             // Transaction to save code and complete order
             await db.$transaction(async (tx) => {
+              const currentOrder = await tx.order.findUnique({ where: { id: order.id } });
+              if (currentOrder?.status !== 'PENDING') return; // Idempotency check
+
               await tx.sMSLog.create({
                 data: {
                   orderId: order.id,
@@ -67,19 +102,19 @@ export async function GET(
           } else if (statusText === 'STATUS_CANCEL') {
              // Upstream cancelled
              await db.$transaction(async (tx) => {
+               const currentOrder = await tx.order.findUnique({ where: { id: order.id } });
+               if (currentOrder?.status !== 'PENDING') return; // Idempotency check
+
                await tx.order.update({
                  where: { id: order.id },
                  data: { status: 'REFUNDED' }
                });
                
                // Refund to CardSecret
-               const secret = await tx.cardSecret.findUnique({ where: { id: order.cardSecretId } });
-               if (secret) {
-                 await tx.cardSecret.update({
-                   where: { id: secret.id },
-                   data: { value: secret.value + order.cost }
-                 });
-               }
+               await tx.cardSecret.update({
+                 where: { id: order.cardSecretId },
+                 data: { value: { increment: order.cost }, status: 'UNUSED' }
+               });
              });
 
              const updatedOrder = await db.order.findUnique({

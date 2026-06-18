@@ -6,6 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test:auth": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON ./src/lib/*.test.mjs",
+    "test:security": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON ./src/lib/rate-limit.test.mjs ./src/lib/hero-sms.test.mjs ./src/lib/redeem-request.test.mjs ./src/lib/inventory-cache.test.mjs",
     "lint": "eslint"
   },
   "dependencies": {

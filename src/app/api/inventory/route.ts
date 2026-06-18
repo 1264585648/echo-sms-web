@@ -1,6 +1,13 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { HeroSMSClient } from '@/lib/hero-sms';
+import {
+  createInventoryCache,
+  getInventoryCacheKey,
+  INVENTORY_CACHE_TTL_MS,
+  type InventorySuccessBody,
+  isValidInventoryCountryId,
+} from '@/lib/inventory-cache';
 
 type ServiceConfig = {
   id: string;
@@ -13,6 +20,8 @@ type PriceEntry = {
 };
 
 type PriceMap = Record<string, Record<string, PriceEntry>>;
+
+const inventoryCache = createInventoryCache();
 
 function inventoryError(code: string, message: string, status: number) {
   return NextResponse.json(
@@ -30,6 +39,13 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const countryId = searchParams.get('countryId') || '0'; // default to Russia if not provided
+    if (!isValidInventoryCountryId(countryId)) {
+      return inventoryError(
+        'COUNTRY_ID_INVALID',
+        'countryId is invalid.',
+        400,
+      );
+    }
 
     const configRecords = await db.systemConfig.findMany();
     const config: Record<string, string> = {};
@@ -46,7 +62,8 @@ export async function GET(req: Request) {
       );
     }
 
-    const exchangeRate = parseFloat(config['EXCHANGE_RATE'] || '1');
+    const exchangeRateConfig = config['EXCHANGE_RATE'] || '1';
+    const exchangeRate = parseFloat(exchangeRateConfig);
     const servicesStr = config['SERVICES'] || '[]';
     let servicesConfig: ServiceConfig[] = [];
     try {
@@ -69,6 +86,17 @@ export async function GET(req: Request) {
 
     if (servicesConfig.length === 0 && !apiKey) {
       return NextResponse.json({ success: true, inventory: [] });
+    }
+
+    const cacheKey = getInventoryCacheKey({
+      countryId,
+      apiKey,
+      exchangeRateConfig,
+      servicesConfig: servicesStr,
+    });
+    const cachedInventory = inventoryCache.get(cacheKey);
+    if (cachedInventory) {
+      return NextResponse.json(cachedInventory);
     }
 
     const client = new HeroSMSClient(apiKey);
@@ -140,7 +168,9 @@ export async function GET(req: Request) {
       }
     }
 
-    return NextResponse.json({ success: true, inventory });
+    const body: InventorySuccessBody = { success: true, inventory };
+    inventoryCache.set(cacheKey, body, INVENTORY_CACHE_TTL_MS);
+    return NextResponse.json(body);
   } catch (error) {
     console.error('Fetch inventory error:', error);
     return inventoryError(

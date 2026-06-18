@@ -1,11 +1,39 @@
+type HeroSMSFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
+
+export type HeroSMSPriceEntry = {
+  cost?: string | number;
+  count?: string | number;
+};
+
+export type HeroSMSPriceMap = Record<string, Record<string, HeroSMSPriceEntry>>;
+
+export type HeroSMSClientOptions = {
+  fetch?: HeroSMSFetch;
+  timeoutMs?: number;
+  baseUrl?: string;
+};
+
+export const HERO_SMS_DEFAULT_TIMEOUT_MS = 10_000;
+
+export class HeroSMSRequestTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`HeroSMS request timed out after ${timeoutMs}ms`);
+    this.name = 'HeroSMSRequestTimeoutError';
+  }
+}
+
 export class HeroSMSClient {
   private apiKey: string;
   private baseUrl: string;
+  private fetchFn: HeroSMSFetch;
+  private timeoutMs: number;
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, options: HeroSMSClientOptions = {}) {
     this.apiKey = apiKey;
     // Common standard endpoint for SMS-activate API clones
-    this.baseUrl = 'https://hero-sms.com/stubs/handler_api.php';
+    this.baseUrl = options.baseUrl || 'https://hero-sms.com/stubs/handler_api.php';
+    this.fetchFn = options.fetch || globalThis.fetch.bind(globalThis);
+    this.timeoutMs = options.timeoutMs ?? HERO_SMS_DEFAULT_TIMEOUT_MS;
   }
 
   private async request(action: string, params: Record<string, string | number> = {}): Promise<string> {
@@ -24,12 +52,26 @@ export class HeroSMSClient {
       url.searchParams.append(key, value.toString());
     }
 
-    const response = await fetch(url.toString());
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    try {
+      const response = await this.fetchFn(url.toString(), {
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      return await response.text();
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new HeroSMSRequestTimeoutError(this.timeoutMs);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
     }
-    
-    return await response.text();
   }
 
   /**
@@ -47,14 +89,18 @@ export class HeroSMSClient {
   /**
    * Get prices and inventory
    */
-  async getPrices(service?: string, country?: string): Promise<any> {
+  async getPrices(service?: string, country?: string): Promise<HeroSMSPriceMap> {
     const params: Record<string, string | number> = {};
     if (service) params.service = service;
     if (country) params.country = country;
     const text = await this.request('getPrices', params);
     try {
-      return JSON.parse(text);
-    } catch (e) {
+      const parsed: unknown = JSON.parse(text);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('Unexpected response shape');
+      }
+      return parsed as HeroSMSPriceMap;
+    } catch {
       throw new Error(`Failed to parse prices. Response: ${text}`);
     }
   }

@@ -15,6 +15,14 @@ type CountryConfig = {
   flag: string;
 };
 
+type CardSecret = {
+  id: string;
+  code: string;
+  value: number;
+  status: string;
+  createdAt: string;
+};
+
 type ConfigResponse = {
   success: boolean;
   config?: Record<string, string>;
@@ -54,6 +62,27 @@ export default function SettingsPage() {
   const [loadingConfig, setLoadingConfig] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  const [secrets, setSecrets] = useState<CardSecret[]>([]);
+  const [loadingSecrets, setLoadingSecrets] = useState(false);
+  const [generateValue, setGenerateValue] = useState("10");
+  const [generateCount, setGenerateCount] = useState("1");
+  const [generating, setGenerating] = useState(false);
+
+  const loadSecrets = async () => {
+    setLoadingSecrets(true);
+    try {
+      const res = await fetch("/api/admin/card-secrets");
+      const data = await res.json();
+      if (data.success) {
+        setSecrets(data.secrets);
+      }
+    } catch {
+      toast.error("Failed to load card secrets.");
+    } finally {
+      setLoadingSecrets(false);
+    }
+  };
+
   const loadConfig = async () => {
     setLoadingConfig(true);
     try {
@@ -89,6 +118,7 @@ export default function SettingsPage() {
         if (data.authenticated) {
           setAuthStatus("authenticated");
           void loadConfig();
+          void loadSecrets();
           return;
         }
         setAuthStatus("guest");
@@ -127,6 +157,7 @@ export default function SettingsPage() {
       setAdminPassword("");
       setAuthStatus("authenticated");
       void loadConfig();
+      void loadSecrets();
       toast.success("Logged in.");
     } catch {
       toast.error("Login failed.");
@@ -139,21 +170,53 @@ export default function SettingsPage() {
     await fetch("/api/admin/session", { method: "DELETE" });
     setAuthStatus("guest");
     setApiKey("");
+    setSecrets([]);
     toast.success("Logged out.");
+  };
+
+  const handleGenerateSecret = async () => {
+    setGenerating(true);
+    try {
+      const res = await fetch("/api/admin/card-secrets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: generateValue, count: generateCount }),
+      });
+      const data = await res.json();
+      if (res.status === 401) {
+        setAuthStatus("guest");
+        toast.error("Unauthorized.");
+        return;
+      }
+      if (data.success) {
+        toast.success(`Generated ${data.created.length} card secret(s).`);
+        void loadSecrets();
+      } else {
+        toast.error(data.error || "Generation failed.");
+      }
+    } catch {
+      toast.error("Generation failed.");
+    } finally {
+      setGenerating(false);
+    }
   };
 
   const handleSave = async () => {
     setSaving(true);
     try {
+      const payload: { key: string; value: string }[] = [
+        { key: "EXCHANGE_RATE", value: exchangeRate },
+        { key: "SERVICES", value: JSON.stringify(services) },
+        { key: "COUNTRIES", value: JSON.stringify(countries) },
+      ];
+      if (apiKey.trim()) {
+        payload.push({ key: "HERO_API_KEY", value: apiKey.trim() });
+      }
+
       const res = await fetch("/api/system/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify([
-          { key: "HERO_API_KEY", value: apiKey },
-          { key: "EXCHANGE_RATE", value: exchangeRate },
-          { key: "SERVICES", value: JSON.stringify(services) },
-          { key: "COUNTRIES", value: JSON.stringify(countries) },
-        ]),
+        body: JSON.stringify(payload),
       });
       const data = (await res.json()) as ConfigResponse;
 
@@ -404,6 +467,81 @@ export default function SettingsPage() {
           ))}
           {services.length === 0 && (
             <p className="text-body-sm text-outline">No services configured.</p>
+          )}
+        </div>
+      </div>
+
+      <div className="min-w-0 space-y-4 bg-surface-container-low p-4 sm:p-6 rounded-xl border border-outline-variant">
+        <h2 className="text-title-lg font-title-lg">Card Secrets Management</h2>
+
+        <div className="flex flex-wrap items-end gap-4 p-4 border border-outline-variant rounded-lg bg-surface">
+          <div className="space-y-2 flex-1 min-w-[120px]">
+            <label className="text-label-md" htmlFor="generate-value">Value (¥)</label>
+            <input
+              id="generate-value"
+              type="number"
+              min="1"
+              step="0.1"
+              value={generateValue}
+              onChange={(e) => setGenerateValue(e.target.value)}
+              className="w-full p-2 rounded bg-surface border border-outline-variant"
+            />
+          </div>
+          <div className="space-y-2 flex-1 min-w-[120px]">
+            <label className="text-label-md" htmlFor="generate-count">Count</label>
+            <input
+              id="generate-count"
+              type="number"
+              min="1"
+              max="50"
+              value={generateCount}
+              onChange={(e) => setGenerateCount(e.target.value)}
+              className="w-full p-2 rounded bg-surface border border-outline-variant"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={handleGenerateSecret}
+            disabled={generating}
+            className="bg-primary text-on-primary px-4 py-2 rounded h-[42px] hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            <Plus className="w-4 h-4" /> {generating ? "Generating..." : "Generate"}
+          </button>
+        </div>
+
+        <div className="mt-4">
+          <h3 className="text-label-lg mb-2">Recent Secrets (Top 50)</h3>
+          {loadingSecrets ? (
+            <div className="text-body-sm text-outline">Loading...</div>
+          ) : secrets.length === 0 ? (
+            <div className="text-body-sm text-outline">No card secrets generated yet.</div>
+          ) : (
+            <div className="overflow-x-auto border border-outline-variant rounded-lg">
+              <table className="w-full text-left text-body-sm">
+                <thead className="bg-surface border-b border-outline-variant">
+                  <tr>
+                    <th className="p-3 font-medium">Code</th>
+                    <th className="p-3 font-medium">Value</th>
+                    <th className="p-3 font-medium">Status</th>
+                    <th className="p-3 font-medium">Created At</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-outline-variant bg-surface-container-lowest">
+                  {secrets.map((secret) => (
+                    <tr key={secret.id}>
+                      <td className="p-3 font-mono">{secret.code}</td>
+                      <td className="p-3 text-primary">¥{secret.value}</td>
+                      <td className="p-3">
+                        <span className={`px-2 py-1 rounded text-xs ${secret.status === 'UNUSED' ? 'bg-[#10B981]/10 text-[#10B981]' : 'bg-outline-variant/30 text-outline'}`}>
+                          {secret.status}
+                        </span>
+                      </td>
+                      <td className="p-3 text-outline">{new Date(secret.createdAt).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       </div>

@@ -21,7 +21,11 @@ async function main() {
       status: 'AVAILABLE'
     }
   });
-  console.log("Created card:", secret.code);
+  console.log("Created card:", {
+    id: secret.id,
+    value: secret.value,
+    status: secret.status,
+  });
   console.log("Created number:", number.phone, "with ID:", number.id);
 }
 

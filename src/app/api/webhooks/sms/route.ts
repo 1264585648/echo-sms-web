@@ -1,8 +1,20 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import {
+  SMS_WEBHOOK_SECRET_HEADER,
+  validateSmsWebhookSecret,
+} from '@/lib/sms-webhook-auth';
 
 export async function POST(req: Request) {
   try {
+    const authResult = validateSmsWebhookSecret(
+      process.env.SMS_WEBHOOK_SECRET,
+      req.headers.get(SMS_WEBHOOK_SECRET_HEADER)
+    );
+    if (!authResult.ok) {
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
+    }
+
     const { numberId, message, sender } = await req.json();
 
     if (!numberId || !message) {

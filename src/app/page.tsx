@@ -5,7 +5,7 @@ import {
   Search, Send, MessageCircle, Bot, Camera, 
   Timer, Copy, Loader, CheckCircle, X, Plus, RefreshCw, AlertCircle
 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import Link from 'next/link';
 import { ALL_COUNTRIES } from "@/lib/countries";
@@ -20,7 +20,7 @@ const IconMap: Record<string, any> = {
   'default': MessageSquare
 };
 
-function ActiveOrderCard({ order, updateOrder, removeOrder }: { order: any, updateOrder: (order: any) => void, removeOrder: (id: string) => void }) {
+function ActiveOrderCard({ order, cardSecretCode, updateOrder, removeOrder }: { order: any, cardSecretCode: string, updateOrder: (order: any) => void, removeOrder: (id: string) => void }) {
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const [copied, setCopied] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -61,7 +61,12 @@ function ActiveOrderCard({ order, updateOrder, removeOrder }: { order: any, upda
   const handleCancel = async () => {
     setCancelling(true);
     try {
-      const res = await fetch(`/api/orders/${order.id}/cancel`, { method: 'POST' });
+      const res = await fetch(`/api/orders/${order.id}/cancel`, {
+        method: 'POST',
+        headers: {
+          'x-card-secret-code': cardSecretCode,
+        },
+      });
       const data = await res.json();
       if (data.success) {
         toast.success("订单已取消，卡密额度已退还");
@@ -188,8 +193,43 @@ function ActiveOrderCard({ order, updateOrder, removeOrder }: { order: any, upda
 }
 
 export default function EchoSMSPage() {
-  const [globalCardSecret, setGlobalCardSecret] = useState("");
+  const [globalCardSecret, setGlobalCardSecret] = useState(() => {
+    if (typeof window === 'undefined') return "";
+    return localStorage.getItem('echo_sms_card_secret') || "";
+  });
   const [activeOrders, setActiveOrders] = useState<any[]>([]);
+
+  // Save to local storage on change
+  useEffect(() => {
+    if (globalCardSecret) {
+      localStorage.setItem('echo_sms_card_secret', globalCardSecret);
+    } else {
+      localStorage.removeItem('echo_sms_card_secret');
+    }
+  }, [globalCardSecret]);
+
+  // Fetch active orders for the card secret to recover session
+  useEffect(() => {
+    if (!globalCardSecret) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cardSecretCode: globalCardSecret }),
+        });
+        const data = await res.json();
+        if (data.success && Array.isArray(data.orders)) {
+          setActiveOrders(data.orders);
+        }
+      } catch (err) {
+        console.error("Failed to recover orders", err);
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [globalCardSecret]);
   
   const [popularCountries, setPopularCountries] = useState<any[]>([]);
   const [tempCountry, setTempCountry] = useState<any>(null); // To store a non-popular country if selected
@@ -265,30 +305,47 @@ export default function EchoSMSPage() {
     return () => window.clearTimeout(timer);
   }, [selectedCountryId, fetchInventory]);
 
+  const activeOrdersRef = useRef(activeOrders);
   useEffect(() => {
-    if (activeOrders.length === 0) return;
+    activeOrdersRef.current = activeOrders;
+  }, [activeOrders]);
+
+  useEffect(() => {
+    if (!globalCardSecret) return;
 
     const interval = setInterval(async () => {
-      const updatedOrders = await Promise.all(activeOrders.map(async (order) => {
-        if (order.status === 'COMPLETED' || order.status === 'REFUNDED' || order.status === 'CANCELLED') return order;
-        
+      const currentOrders = activeOrdersRef.current;
+      const pendingOrders = currentOrders.filter(
+        o => !['COMPLETED', 'REFUNDED', 'CANCELLED'].includes(o.status)
+      );
+
+      if (pendingOrders.length === 0) return;
+
+      const promises = pendingOrders.map(async (order) => {
         try {
-          const res = await fetch(`/api/orders/${order.id}`);
+          const res = await fetch(`/api/orders/${order.id}`, {
+            headers: {
+              'x-card-secret-code': globalCardSecret,
+            },
+          });
           const data = await res.json();
-          if (data.success) {
-            return data.order;
-          }
+          if (data.success) return data.order;
         } catch (e) {
           console.error("Poll error", e);
         }
-        return order;
-      }));
+        return null;
+      });
+
+      const results = await Promise.all(promises);
       
-      setActiveOrders(updatedOrders);
+      setActiveOrders(prev => prev.map(o => {
+        const updated = results.find(r => r && r.id === o.id);
+        return updated ? updated : o;
+      }));
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [activeOrders]);
+  }, [globalCardSecret]);
 
   const openConfirmModal = (svc: any) => {
     setSelectedService(svc);
@@ -646,6 +703,7 @@ export default function EchoSMSPage() {
                 <ActiveOrderCard 
                   key={order.id} 
                   order={order} 
+                  cardSecretCode={globalCardSecret}
                   updateOrder={updateOrder} 
                   removeOrder={removeOrder} 
                 />
